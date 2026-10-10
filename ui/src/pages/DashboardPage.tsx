@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Boxes, Route, ShieldAlert, ShieldCheck, Siren, Workflow } from "lucide-react";
-import { useState } from "react";
+import { Activity, Boxes, Cloud, Route, ShieldAlert, ShieldCheck, Siren, Workflow } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
@@ -10,12 +11,17 @@ import { MetricCard } from "@/components/MetricCard";
 import { Panel } from "@/components/Panel";
 import { Skeleton } from "@/components/Skeleton";
 import { SeverityBadge } from "@/components/SeverityBadge";
-import { DashboardCharts } from "@/components/soc/DashboardCharts";
+import { DashboardCharts, InventoryTrendChart } from "@/components/soc/DashboardCharts";
 import { PdfPreviewDialog } from "@/components/soc/PdfPreviewDialog";
 import { RiskPanel } from "@/components/soc/RiskPanel";
-import { ThreatMap } from "@/components/soc/ThreatMap";
-import { loadDemo, type DemoFixture, type Finding } from "@/lib/api";
+import { getAssetFacets, loadDemo, type DemoFixture, type Finding } from "@/lib/api";
 import { plainError } from "@/lib/errors";
+import {
+  readInventoryHistory,
+  recordInventorySnapshot,
+  saveInventoryHistory,
+  type InventorySnapshot,
+} from "@/lib/inventoryHistory";
 import { useSecurityAnalytics } from "@/lib/useSecurityAnalytics";
 
 const SEVERITIES = [
@@ -47,7 +53,23 @@ export function DashboardPage() {
   const qc = useQueryClient();
   const analytics = useSecurityAnalytics();
   const [pdfOpen, setPdfOpen] = useState(false);
+  const [inventoryHistory, setInventoryHistory] = useState(readInventoryHistory);
+  const assetFacets = useQuery({ queryKey: ["asset-facets"], queryFn: getAssetFacets });
   const { assets, facets, cspm: misQuery, combo: comboQuery, findings, pending, unavailable, errorMessage, model } = analytics;
+
+  useEffect(() => {
+    if (!assetFacets.data || inventoryHistory.error) return;
+    const current: InventorySnapshot = {
+      date: new Date().toISOString().slice(0, 10),
+      total: assetFacets.data.total,
+      aws: assetFacets.data.by_cloud.aws ?? 0,
+      gcp: assetFacets.data.by_cloud.gcp ?? 0,
+      exposed: assetFacets.data.internet_exposed,
+    };
+    const snapshots = recordInventorySnapshot(inventoryHistory.snapshots, current);
+    const error = saveInventoryHistory(snapshots);
+    setInventoryHistory({ snapshots, error });
+  }, [assetFacets.data, assetFacets.dataUpdatedAt, inventoryHistory.error]);
 
   const load = useMutation({
     mutationFn: (fixture: DemoFixture) => loadDemo(fixture),
@@ -120,6 +142,27 @@ export function DashboardPage() {
           loading={assets.isPending}
           value={assets.isError ? "—" : assets.data?.total}
           hint={assets.isError && !apiDown ? "Unavailable" : undefined}
+        />
+        <MetricCard
+          label="AWS assets"
+          icon={Cloud}
+          loading={assetFacets.isPending}
+          value={assetFacets.isError ? "—" : assetFacets.data?.by_cloud.aws ?? 0}
+          hint={assetFacets.isError ? "Unavailable" : "Current inventory"}
+        />
+        <MetricCard
+          label="GCP assets"
+          icon={Cloud}
+          loading={assetFacets.isPending}
+          value={assetFacets.isError ? "—" : assetFacets.data?.by_cloud.gcp ?? 0}
+          hint={assetFacets.isError ? "Unavailable" : "Current inventory"}
+        />
+        <MetricCard
+          label="Internet exposed"
+          icon={Activity}
+          loading={assetFacets.isPending}
+          value={assetFacets.isError ? "—" : assetFacets.data?.internet_exposed ?? 0}
+          hint={assetFacets.isError ? "Unavailable" : "Current inventory"}
         />
         <MetricCard
           label="Misconfigurations"
@@ -196,9 +239,43 @@ export function DashboardPage() {
         ) : null}
       </Panel>
 
-      <Panel title="Live threat map" eyebrow="Simulated">
-        {pending ? <Skeleton className="h-72 w-full" /> : null}
-        {model ? <ThreatMap events={model.mapEvents} fallback={model.mapUsesFallback} /> : null}
+      <Panel title="Cloud inventory over time" eyebrow="Observed in this browser">
+        <p className="mb-3 text-xs leading-relaxed text-[var(--muted)]">
+          Daily snapshots are recorded when this dashboard is visited and kept in this browser (up to 30 days).
+          History starts now; it is not a reconstruction of earlier inventory.
+        </p>
+        {assetFacets.isError ? (
+          <ErrorNote>{plainError(assetFacets.error, "Couldn't load current cloud inventory.")}</ErrorNote>
+        ) : null}
+        {inventoryHistory.error ? <ErrorNote>{inventoryHistory.error}</ErrorNote> : null}
+        {assetFacets.isPending ? <Skeleton className="h-64 w-full" /> : null}
+        {!assetFacets.isPending && !assetFacets.isError && inventoryHistory.snapshots.length === 0 ? (
+          <EmptyState title="Inventory history starts today" body="Visit this dashboard on later days to build the local trend." />
+        ) : null}
+        {!assetFacets.isPending && !assetFacets.isError && inventoryHistory.snapshots.length > 0 ? (
+          <InventoryTrendChart snapshots={inventoryHistory.snapshots} />
+        ) : null}
+      </Panel>
+
+      <Panel
+        title="Global threat activity"
+        eyebrow="Simulated"
+        action={
+          <Link to="/threats" className="text-xs font-medium text-[var(--link)] hover:underline">
+            Open threat map
+          </Link>
+        }
+      >
+        <p className="text-sm leading-relaxed text-[var(--muted)]">
+          Explore the simulated threat map and its illustrative geographic activity on a dedicated page.
+        </p>
+        <Link
+          to="/threats"
+          className="mt-3 inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--wash)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--hover)]"
+        >
+          <Activity className="h-4 w-4" aria-hidden />
+          View threat map
+        </Link>
       </Panel>
 
       <Panel title="Risks and notifications" eyebrow="Analyst workflow · this browser">
@@ -215,7 +292,7 @@ export function DashboardPage() {
         ) : null}
         {model && model.dataState === "empty" ? (
           <p className="mt-3 text-xs text-[var(--muted)]">
-            No findings are loaded, so this list stays empty. The map above uses the labeled simulated fallback.
+            No findings are loaded, so this list stays empty. The Threat map page uses the labeled simulated fallback.
           </p>
         ) : null}
       </Panel>

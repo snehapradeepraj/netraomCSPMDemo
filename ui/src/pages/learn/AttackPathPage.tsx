@@ -1,362 +1,484 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useState } from "react";
+import { ArrowDown, ArrowRight, Check, GitBranch, Route, ShieldAlert } from "lucide-react";
 
-import { Button } from "@/components/Button";
-import { Panel } from "@/components/Panel";
 import { LearnNav } from "@/pages/learn/LearnNav";
 
 type Stage = {
   id: string;
   title: string;
   kind: "stage" | "decision";
-  x: number;
-  y: number;
-  w: number;
+  summary: string;
   explanation: string;
   inputs: string;
   outputs: string;
-  role: string;
+  whyItMatters: string;
   runtime: string;
+  implementation: string;
 };
 
 const STAGES: Stage[] = [
   {
     id: "collect",
-    title: "Data Collection",
+    title: "Collect inventory",
     kind: "stage",
-    x: 40,
-    y: 40,
-    w: 180,
-    explanation: "Gather cloud inventory: accounts, networks, workloads, identities, and storage.",
-    inputs: "Collector output or, in this demo, a chosen fixture (enterprise, AWS, GCP).",
+    summary: "Start with cloud resources and their properties.",
+    explanation:
+      "The pipeline needs resource records for accounts, networks, workloads, identities, and storage before it can reason about trust.",
+    inputs: "A cloud collector's output, or a selected demo fixture.",
     outputs: "Raw resource documents.",
-    role: "Start of the pipeline. Nothing is scored yet.",
+    whyItMatters: "The quality and coverage of the inventory bounds what later stages can detect.",
     runtime:
-      "The Dashboard load buttons post bundled synthetic fixtures. They do not call live AWS or GCP APIs. Collector modules exist in the backend tree, but this UI path does not run them.",
+      "Dashboard fixture buttons load bundled synthetic data. They do not call AWS or GCP APIs. The cloud collector modules are a separate workflow.",
+    implementation: "Dashboard fixture controls and backend ingestion pipeline",
   },
   {
     id: "preprocess",
-    title: "Data Preprocessing",
+    title: "Normalize records",
     kind: "stage",
-    x: 280,
-    y: 40,
-    w: 190,
-    explanation: "Turn raw collector JSON into the normalized trust-graph bundle the loaders expect.",
-    inputs: "Raw documents.",
-    outputs: "Normalized assets and relationships, or a rejection when the shape is invalid.",
-    role: "Drops records that cannot become nodes.",
-    runtime: "Learn → Raw to normalized shows this step on the fixture files. The load API consumes the normalized bundle.",
+    summary: "Convert provider-specific records to the shared graph contract.",
+    explanation:
+      "Provider-shaped documents are transformed into the normalized bundle used by the rest of the application. Invalid records should not silently become partial graph objects.",
+    inputs: "Raw resource documents.",
+    outputs: "Normalized assets and relationships.",
+    whyItMatters: "A shared shape lets detection and graph traversal work across cloud providers.",
+    runtime:
+      "The Raw → normalized Learn page demonstrates this transformation for the fixture files. The load API consumes the normalized bundle.",
+    implementation: "Learn → Raw to normalized and the ingestion pipeline",
   },
   {
     id: "invalid",
-    title: "Invalid data",
+    title: "Invalid record",
     kind: "decision",
-    x: 280,
-    y: 190,
-    w: 190,
-    explanation: "If a record is missing identity or fails the bundle shape, it is not inserted as a graph node.",
-    inputs: "A raw or half-normalized document.",
-    outputs: "No asset row and no edge. The pipeline stops for that record and collection has to be fixed.",
-    role: "Decision branch. It does not invent a path.",
-    runtime: "The fixtures shipped with this demo are already valid. This branch is the educational stop for bad input, not a second detector.",
+    summary: "A record without a usable identity cannot become a graph node.",
+    explanation:
+      "If a record is missing its identity or does not satisfy the normalized bundle shape, that record is rejected rather than being assigned an invented node.",
+    inputs: "A raw or partially normalized document.",
+    outputs: "No asset row or graph edge for that record.",
+    whyItMatters: "This is a data-quality stop, not a security finding and not an attack path.",
+    runtime:
+      "The shipped demo fixtures are valid. This branch describes what happens to malformed input; it is not a second detection rule.",
+    implementation: "Normalization and ingestion validation",
   },
   {
     id: "extract",
-    title: "Entity Extraction",
+    title: "Create graph entities",
     kind: "stage",
-    x: 530,
-    y: 40,
-    w: 190,
-    explanation: "Each asset becomes an entity: compute, storage, database, network, or identity, with a stable graph node id.",
+    summary: "Give each resource a stable graph node identity.",
+    explanation:
+      "Assets such as compute, storage, databases, networks, and identities become graph nodes. Their metadata can include display names, cloud, region, resource type, and exposure.",
     inputs: "Normalized assets.",
-    outputs: "Node identities, display names, cloud, region, and exposure flags.",
-    role: "These are the vertices later traversal can walk.",
-    runtime: "Load writes Postgres asset rows and graph nodes that share graph_node_id.",
+    outputs: "Graph nodes keyed by stable node IDs.",
+    whyItMatters: "Stable IDs let database asset records and graph relationships refer to the same resource.",
+    runtime: "Loading writes PostgreSQL asset rows and graph nodes linked by graph_node_id.",
+    implementation: "Asset ingestion and graph-writer backends",
   },
   {
     id: "relate",
-    title: "Relationship Mapping",
+    title: "Map relationships",
     kind: "stage",
-    x: 780,
-    y: 40,
-    w: 200,
-    explanation: "Edges record how entities relate: ingress, attachment, assume-role, read, write, and similar trust edges.",
-    inputs: "Normalized relationships.",
-    outputs: "Directed edges. Storage direction is canonical; attacker direction is derived later.",
-    role: "Without edges, entities stay isolated.",
+    summary: "Represent trust and access as typed, directed edges.",
+    explanation:
+      "Relationships describe how resources connect—for example ingress, security-group membership, role attachment, read, write, or administration. Their stored direction is canonical; traversal direction is a separate policy.",
+    inputs: "Normalized relationships and their endpoint node IDs.",
+    outputs: "Typed graph edges with stable edge IDs.",
+    whyItMatters: "A resource can be exposed without being a path to a target; the connecting relationships explain how movement is possible.",
     runtime:
-      "Edge kinds follow ATTACK_TRAVERSAL_POLICY in attack_path_engine.py (forward or reverse). The stored edge is not rewritten.",
+      "Attack-path traversal applies ATTACK_TRAVERSAL_POLICY to selected edge kinds without rewriting their stored direction.",
+    implementation: "backend/app/attack_path_engine.py and the graph writer",
   },
   {
     id: "missing",
-    title: "Missing relationships",
+    title: "Relationship is missing",
     kind: "decision",
-    x: 780,
-    y: 190,
-    w: 200,
-    explanation: "If the nodes for a finding are not connected under the traversal policy, there is no attacker route.",
-    inputs: "Nodes with no allowed hop between them.",
-    outputs: "An empty route. Scoring can still run on the nodes themselves.",
-    role: "Decision branch. A finding is kept; a path is not invented.",
+    summary: "Disconnected resources do not make a valid attacker route.",
+    explanation:
+      "If the relevant nodes are not connected by relationships allowed by the traversal policy, the engine cannot claim an attacker route between them.",
+    inputs: "Finding-related nodes and the available graph edges.",
+    outputs: "No attack path; the finding itself can still be kept and scored.",
+    whyItMatters: "The UI must distinguish a confirmed route from nearby graph context.",
     runtime:
-      "assess_finding_path returns no attack path and still computes exposure, privilege, exploitability, and impact. Findings then says there is no valid attacker route.",
+      "The finding path response can contain neighborhood context while attack_path_nodes and attack_path_edge_ids remain empty when no valid route is found.",
+    implementation: "backend/app/attack_path_engine.py and the finding path API",
   },
   {
     id: "graph",
-    title: "Graph Construction",
+    title: "Build the trust graph",
     kind: "stage",
-    x: 400,
-    y: 320,
-    w: 200,
-    explanation: "Nodes and edges are loaded into the graph store used for neighborhood and path queries.",
+    summary: "Load entities and relationships into the graph store.",
+    explanation:
+      "The nodes and edges are assembled into the tenant's trust graph, which supports graph-lab exploration, neighborhood queries, and attack-path analysis.",
     inputs: "Extracted entities and mapped relationships.",
-    outputs: "A traversable graph for the demo tenant.",
-    role: "This is the structure both labs and finding detail read.",
-    runtime: "The demo graph is Neo4j. Tests can use the NetworkX backend. Construction is the fixture load, not a separate UI step.",
+    outputs: "A queryable graph for the selected tenant.",
+    whyItMatters: "The graph makes relationships explicit; isolated asset rows alone cannot establish reachability.",
+    runtime:
+      "The demo uses Neo4j for graph storage. Tests can use the NetworkX backend. Graph construction happens as part of fixture ingestion.",
+    implementation: "Graph-writer backends and graph API",
   },
   {
     id: "analyze",
-    title: "Attack-Path Analysis",
+    title: "Search candidate routes",
     kind: "stage",
-    x: 400,
-    y: 460,
-    w: 220,
+    summary: "Find bounded, simple routes from attacker entry points.",
     explanation:
-      "Search the graph for simple attacker routes, then rank them. BFS expands hop by hop and finds whether a route exists within a hop limit. DFS follows one branch to the end before backtracking; it is useful for enumerating a branch, and it is not what this app runs. Dijkstra (and the bounded heap search here) orders routes by traversal cost so cheaper routes surface first. A* adds a heuristic toward the target; this ranker does not.",
-    inputs: "Entry nodes (internet or public) and other finding nodes, plus edge costs.",
-    outputs: "Zero or more simple routes, each with a traversal cost.",
-    role: "Chooses candidate routes. It does not by itself decide critical versus low.",
+      "The engine starts from internet or public entry points, follows allowed attacker-traversal directions, and searches toward finding-related target nodes. A route cannot repeat a node, and the search is bounded.",
+    inputs: "Entry nodes, target nodes, graph edges, and edge traversal costs.",
+    outputs: "Candidate routes with ordered node IDs, edge IDs, and traversal costs.",
+    whyItMatters: "Traversal cost helps order route candidates; it is not the final security-risk score.",
     runtime:
-      "Finding scoring calls assess_finding_path → find_rank_paths_dijkstra (max 8 hops, up to 10 routes), then sorts by risk score, then cost. find_candidate_paths_bfs is implemented and unit-tested, and finding scoring does not call it. There is no DFS function. Comments mention A*; the heap key is traversal cost only, so this is not A*.",
-  },
-  {
-    id: "nopath",
-    title: "No meaningful path",
-    kind: "decision",
-    x: 680,
-    y: 460,
-    w: 200,
-    explanation: "The search returns no route that reaches another finding node within the hop limit.",
-    inputs: "A graph search with an empty result.",
-    outputs: "attack_path_nodes stays empty. The factor score still exists.",
-    role: "Decision branch into alert generation without a highlighted route.",
-    runtime: "Same outcome as missing relationships: the finding remains, the graph view shows context only.",
+      "Finding scoring calls assess_finding_path → find_rank_paths_dijkstra with a maximum of 8 hops and up to 10 candidates. It ranks the selected finding paths by risk score, then traversal cost. BFS exists and is tested but is not the finding scorer's search; DFS is not implemented, and this is not A*.",
+    implementation: "backend/app/attack_path_engine.py",
   },
   {
     id: "found",
-    title: "Meaningful path found",
+    title: "Route found",
     kind: "decision",
-    x: 160,
-    y: 460,
-    w: 200,
-    explanation: "At least one simple route connects an entry to another finding node.",
-    inputs: "The best ranked route.",
-    outputs: "Ordered node ids and edge ids handed to risk scoring and the UI highlight.",
-    role: "Decision branch into scoring and visualization.",
-    runtime: "The winning route is stored on the finding as path edges, attack_path_nodes, and attack_path_edge_ids.",
+    summary: "At least one candidate reaches a finding-related target.",
+    explanation:
+      "A route is meaningful only when the traversal reaches a target under the search rules. Its node IDs and exact ordered edge IDs are retained, including when an edge is traversed opposite to its canonical stored direction.",
+    inputs: "One or more valid candidate routes.",
+    outputs: "The selected route's ordered nodes and exact edges.",
+    whyItMatters: "Exact edge identity prevents parallel relationships from being mistaken for one another.",
+    runtime:
+      "The selected route is stored separately from graph-neighborhood context so the UI can highlight only the actual route.",
+    implementation: "Finding path generation and backend/app/attack_path_engine.py",
+  },
+  {
+    id: "nopath",
+    title: "No route found",
+    kind: "decision",
+    summary: "The target is unreachable within the allowed search bounds.",
+    explanation:
+      "An empty search result means the graph does not establish a route under the current traversal policy and limits. It does not mean the finding is discarded.",
+    inputs: "A bounded graph search with no route to a target.",
+    outputs: "An empty attack path; graph context can still be shown.",
+    whyItMatters: "The product should be explicit about what the graph proves and what it does not.",
+    runtime:
+      "The finding can still receive a factor score. The path view should report that no valid attacker route was identified instead of highlighting context edges as a route.",
+    implementation: "Finding path generation and the finding path API",
   },
   {
     id: "score",
-    title: "Risk Scoring",
+    title: "Calculate risk score",
     kind: "stage",
-    x: 160,
-    y: 620,
-    w: 200,
+    summary: "Score the finding independently from route search cost.",
     explanation:
-      "Four factors, each 0–25: exposure, privilege, exploitability, and impact. The final score is the sum, capped at 100. Critical is 90+, high is 70+, medium is 40+, otherwise low.",
-    inputs: "A route when one exists, otherwise the finding nodes alone.",
+      "The existing scorer adds four factors—exposure, privilege, exploitability, and impact—each from 0 to 25, for a total capped at 100. The score describes finding risk; Dijkstra traversal cost describes route search preference.",
+    inputs: "A selected route when available, otherwise finding-related nodes and their metadata.",
     outputs: "risk_score and score_breakdown.",
-    role: "Explains why a finding is critical or low. Independent of the traversal-cost sort.",
-    runtime: "evaluate_path_risk_breakdown in attack_path_engine.py. Both path and non-path findings receive it.",
-  },
-  {
-    id: "visualize",
-    title: "Attack Path Visualization",
-    kind: "stage",
-    x: 420,
-    y: 620,
-    w: 210,
-    explanation: "Draw the neighborhood and emphasize the stored route.",
-    inputs: "Graph nodes, edges, and the stored attack-path ids.",
-    outputs: "The Findings detail canvas.",
-    role: "Lets a person inspect the route. This Learn diagram is not that canvas.",
-    runtime: "Findings uses React Flow (GraphCanvas). Highlighted nodes and edges come from the stored route. This page is an educational flowchart only.",
+    whyItMatters: "Keeping risk scoring separate avoids treating a cheap-to-traverse route as automatically more severe.",
+    runtime:
+      "evaluate_path_risk_breakdown produces the four-factor score for findings both with and without a valid route. Severity thresholds are critical ≥90, high ≥70, medium ≥40, otherwise low.",
+    implementation: "backend/app/attack_path_engine.py",
   },
   {
     id: "alert",
-    title: "Alert Generation and Mitigation",
+    title: "Create the finding",
     kind: "stage",
-    x: 690,
-    y: 620,
-    w: 230,
-    explanation: "Persist the finding and describe what a person might change. Mitigation in the new dashboard is guidance plus a browser-local status.",
-    inputs: "Misconfiguration or toxic-combination result, score, and optional route.",
-    outputs: "A findings row. Optional analyst status in this browser.",
-    role: "Closes the teaching loop. It does not open a ticket or change a cloud account.",
+    summary: "Persist the detection and expose its score and optional route.",
+    explanation:
+      "Misconfiguration and toxic-combination detections produce findings. A finding can include its fingerprint, severity, risk score, and exact route data when a valid path exists.",
+    inputs: "A detection result, score breakdown, and optional selected route.",
+    outputs: "A finding available through the API and UI.",
+    whyItMatters: "The finding is the user-facing record that joins the detection, risk explanation, and route evidence.",
     runtime:
-      "misconfig.py and combos.py write findings. The API has no resolve workflow. Dashboard statuses are labeled analyst workflow and stay in localStorage.",
+      "The existing detection rules generate findings. Analyst status and mitigation guidance in the dashboard are local workflow aids; they do not remediate cloud resources.",
+    implementation: "backend detection modules and the findings API",
+  },
+  {
+    id: "visualize",
+    title: "Inspect the route",
+    kind: "stage",
+    summary: "Show route evidence separately from nearby graph context.",
+    explanation:
+      "The Findings detail canvas displays graph nodes and edges, then emphasizes the exact stored route when one exists. Nearby relationships provide context but should not be presented as traversed attack steps.",
+    inputs: "Finding path response, graph nodes and edges, and exact path IDs.",
+    outputs: "An interactive graph for investigating the finding.",
+    whyItMatters: "The visualization should let an analyst follow the route from entry point to target without confusing the order or edge identity.",
+    runtime:
+      "Findings uses the shared React Flow GraphCanvas. This Learn page explains the workflow; its example route below is illustrative and is not a live finding.",
+    implementation: "ui/src/components/GraphCanvas.tsx and ui/src/pages/FindingsPage.tsx",
   },
 ];
 
-const ARROWS: { d: string; label?: string }[] = [
-  { d: "M220 80 H280" },
-  { d: "M470 80 H530" },
-  { d: "M720 80 H780" },
-  { d: "M880 120 V190", label: "invalid" },
-  { d: "M880 270 V300 H500 V320" },
-  { d: "M375 270 V300" },
-  { d: "M500 400 V460" },
-  { d: "M400 500 H360", label: "path" },
-  { d: "M620 500 H680", label: "no path" },
-  { d: "M880 270 H980 V735 H920" },
-  { d: "M260 540 V620" },
-  { d: "M360 660 H420" },
-  { d: "M630 700 H690" },
-  { d: "M780 540 V620" },
+const FLOW_GROUPS = [
+  {
+    eyebrow: "01 · Build the graph",
+    title: "From inventory to relationships",
+    description: "Resources become stable nodes, and their trust relationships become typed edges.",
+    stageIds: ["collect", "preprocess", "extract", "relate", "graph"],
+  },
+  {
+    eyebrow: "02 · Search and decide",
+    title: "Check whether attacker movement is supported",
+    description: "Search produces either an ordered route or an explicit no-route outcome.",
+    stageIds: ["analyze", "found", "nopath"],
+  },
+  {
+    eyebrow: "03 · Score and investigate",
+    title: "Turn evidence into an explainable finding",
+    description: "A finding can be scored with or without a route; the UI highlights only exact route evidence.",
+    stageIds: ["score", "alert", "visualize"],
+  },
 ];
 
+const ROUTE_STEPS = [
+  {
+    name: "Internet",
+    id: "net:0.0.0.0/0",
+    detail: "Attacker entry point",
+    color: "border-orange-400/50 bg-orange-500/10",
+  },
+  {
+    name: "Public security group",
+    id: "sg:public",
+    detail: "Allows ingress from the internet",
+    color: "border-amber-400/50 bg-amber-500/10",
+  },
+  {
+    name: "Application VM",
+    id: "vm:app",
+    detail: "Attached to the security group",
+    color: "border-sky-400/50 bg-sky-500/10",
+  },
+  {
+    name: "Admin role",
+    id: "role:admin",
+    detail: "Attached to the VM",
+    color: "border-violet-400/50 bg-violet-500/10",
+  },
+  {
+    name: "Production database",
+    id: "db:prod",
+    detail: "Target reachable via can_admin",
+    color: "border-rose-400/50 bg-rose-500/10",
+  },
+];
+
+const EDGE_LABELS = ["allows_ingress", "has_sg", "attached_to", "can_admin"];
+
+function getStage(id: string) {
+  return STAGES.find((stage) => stage.id === id)!;
+}
+
 export function AttackPathPage() {
-  const [selected, setSelected] = useState<string>("analyze");
-  const [view, setView] = useState({ x: 20, y: 10, scale: 0.92 });
-  const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
-  const frame = useRef<HTMLDivElement>(null);
-  const stage = STAGES.find((item) => item.id === selected) ?? STAGES[0];
-
-  useEffect(() => {
-    const node = frame.current;
-    if (!node) return;
-    const onWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      const factor = event.deltaY > 0 ? 0.92 : 1.08;
-      setView((current) => ({ ...current, scale: Math.min(2.2, Math.max(0.45, current.scale * factor)) }));
-    };
-    node.addEventListener("wheel", onWheel, { passive: false });
-    return () => node.removeEventListener("wheel", onWheel);
-  }, []);
-
-  const fit = () => setView({ x: 20, y: 10, scale: 0.92 });
+  const [selected, setSelected] = useState("analyze");
+  const stage = getStage(selected);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <LearnNav />
-      <p className="max-w-3xl text-sm leading-relaxed text-[var(--muted)]">
-        Educational flowchart for how an attack path is produced. BFS, DFS, and Dijkstra are explained on the analysis stage. This prototype&apos;s finding scorer runs a bounded Dijkstra-style search in <code>attack_path_engine.py</code> and scores exposure, privilege, exploitability, and impact. DFS is not implemented. BFS is implemented and tested, and it is not what finding scoring calls.
-      </p>
-      <div className="flex flex-wrap gap-2 text-[11px] text-[var(--muted)]">
-        <span className="inline-flex items-center gap-1.5 rounded-md bg-[var(--inset)] px-2 py-1 ring-1 ring-[var(--ring-soft)]">
-          <span className="h-2.5 w-4 rounded-sm bg-[var(--accent)]" /> Stage
-        </span>
-        <span className="inline-flex items-center gap-1.5 rounded-md bg-[var(--inset)] px-2 py-1 ring-1 ring-[var(--ring-soft)]">
-          <span className="h-2.5 w-4 rounded-sm bg-[var(--warning)]" /> Decision
-        </span>
-        <span className="rounded-md bg-[var(--inset)] px-2 py-1 ring-1 ring-[var(--ring-soft)]">Flow moves from collection across the top, then down into analysis</span>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Button variant="secondary" onClick={() => setView((current) => ({ ...current, scale: Math.min(2.2, current.scale * 1.15) }))}>
-          Zoom in
-        </Button>
-        <Button variant="secondary" onClick={() => setView((current) => ({ ...current, scale: Math.max(0.45, current.scale / 1.15) }))}>
-          Zoom out
-        </Button>
-        <Button variant="secondary" onClick={fit}>
-          Fit
-        </Button>
-        <Button variant="secondary" onClick={fit}>
-          Reset
-        </Button>
-      </div>
-      <div
-        ref={frame}
-        className="h-[min(560px,70vh)] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--canvas)]"
-        onPointerDown={(event) => {
-          drag.current = { px: event.clientX, py: event.clientY, x: view.x, y: view.y };
-          (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
-        }}
-        onPointerMove={(event) => {
-          if (!drag.current) return;
-          setView((current) => ({
-            ...current,
-            x: drag.current!.x + event.clientX - drag.current!.px,
-            y: drag.current!.y + event.clientY - drag.current!.py,
-          }));
-        }}
-        onPointerUp={() => {
-          drag.current = null;
-        }}
+
+      <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-[var(--shadow)] sm:p-6">
+        <div className="flex items-start gap-3">
+          <div className="rounded-xl bg-[var(--glow-accent)] p-2.5 text-[var(--link)]">
+            <Route size={21} aria-hidden="true" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold tracking-[0.14em] text-[var(--link)] uppercase">
+              Attack path, step by step
+            </p>
+            <h2 className="mt-1 text-xl font-semibold">From cloud inventory to route evidence</h2>
+            <p className="mt-2 max-w-4xl text-sm leading-relaxed text-[var(--muted)]">
+              An attack path is an ordered chain of permitted relationships from an attacker entry point to a target.
+              The pipeline below shows how this product builds that evidence, scores findings, and presents the result.
+              Select any step to see what it means and what the application actually does.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section
+        aria-labelledby="example-route-heading"
+        className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-[var(--shadow)] sm:p-6"
       >
-        <svg viewBox="0 0 980 780" className="h-full w-full" role="img" aria-label="Attack path analysis flowchart">
-          <g transform={`translate(${view.x} ${view.y}) scale(${view.scale})`}>
-            <defs>
-              <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-                <path d="M0 0 L6 3 L0 6 Z" fill="var(--muted)" />
-              </marker>
-            </defs>
-            {ARROWS.map((arrow) => (
-              <path key={arrow.d} d={arrow.d} fill="none" stroke="var(--muted)" strokeWidth="1.4" markerEnd="url(#arrow)" />
-            ))}
-            {STAGES.map((item) => {
-              const active = item.id === selected;
-              const fill = item.kind === "decision" ? "color-mix(in srgb, var(--warning) 22%, var(--card))" : "var(--card)";
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold tracking-[0.14em] text-[var(--muted)] uppercase">Illustrative route</p>
+            <h2 id="example-route-heading" className="mt-1 text-lg font-semibold">
+              How an attacker could reach a sensitive target
+            </h2>
+          </div>
+          <span className="rounded-full border border-[var(--border)] bg-[var(--inset)] px-3 py-1 text-xs text-[var(--muted)]">
+            Example only · not live finding data
+          </span>
+        </div>
+
+        <ol className="mt-5 flex flex-col gap-2 xl:flex-row xl:items-stretch xl:gap-1">
+          {ROUTE_STEPS.map((step, index) => (
+            <Fragment key={step.id}>
+              <li key={step.id} className="min-w-0 flex-1">
+                <div className={`h-full rounded-xl border p-3 ${step.color}`}>
+                  <div className="flex items-start gap-2">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--card)] text-xs font-bold text-[var(--foreground)] ring-1 ring-[var(--ring-soft)]">
+                      {index + 1}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-semibold">{step.name}</p>
+                      <p className="mt-1 text-xs leading-relaxed text-[var(--muted)]">{step.detail}</p>
+                      <code className="mt-2 block truncate text-[11px] text-[var(--code-fg)]" title={step.id}>
+                        {step.id}
+                      </code>
+                    </div>
+                  </div>
+                </div>
+              </li>
+              {index < ROUTE_STEPS.length - 1 && (
+                <li
+                  key={`${step.id}-to-${ROUTE_STEPS[index + 1].id}`}
+                  aria-label={`Then ${EDGE_LABELS[index]}`}
+                  className="flex shrink-0 items-center justify-center gap-2 py-1 text-[10px] font-medium text-[var(--muted)] xl:w-[76px] xl:flex-col xl:py-0"
+                >
+                  <ArrowDown size={16} className="text-[var(--link)] xl:hidden" aria-hidden="true" />
+                  <ArrowRight size={18} className="hidden text-[var(--link)] xl:block" aria-hidden="true" />
+                  <span className="text-center">{EDGE_LABELS[index]}</span>
+                </li>
+              )}
+            </Fragment>
+          ))}
+        </ol>
+
+        <div className="mt-4 flex items-start gap-2 rounded-lg bg-[var(--inset)] p-3 text-xs leading-relaxed text-[var(--muted)]">
+          <GitBranch className="mt-0.5 shrink-0 text-[var(--link)]" size={15} aria-hidden="true" />
+          <p>
+            These arrows show <strong className="text-[var(--foreground)]">attacker movement</strong>, not the
+            canonical edge direction. The graph stores <code>allows_ingress</code> as security group → Internet,
+            <code> has_sg</code> as VM → security group, and <code> attached_to</code> as role → VM; traversal can
+            follow those relationships in reverse to explain movement toward the target.
+          </p>
+        </div>
+      </section>
+
+      <section aria-labelledby="pipeline-heading" className="space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="rounded-xl bg-[var(--glow-cyan)] p-2.5 text-[var(--live)]">
+            <ShieldAlert size={21} aria-hidden="true" />
+          </div>
+          <div>
+            <p className="text-xs font-semibold tracking-[0.14em] text-[var(--muted)] uppercase">Product workflow</p>
+            <h2 id="pipeline-heading" className="mt-1 text-xl font-semibold">How the application produces a finding</h2>
+            <p className="mt-1 text-sm leading-relaxed text-[var(--muted)]">
+              Follow the numbered steps. The two exception cards explain where data quality or missing connectivity
+              changes the result.
+            </p>
+          </div>
+        </div>
+
+        {FLOW_GROUPS.map((group) => (
+          <section
+            key={group.eyebrow}
+            aria-label={group.title}
+            className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 shadow-[var(--shadow)] sm:p-5"
+          >
+            <div className="mb-4">
+              <p className="text-[11px] font-bold tracking-[0.14em] text-[var(--link)] uppercase">{group.eyebrow}</p>
+              <h3 className="mt-1 font-semibold">{group.title}</h3>
+              <p className="mt-1 text-sm text-[var(--muted)]">{group.description}</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {group.stageIds.map((id, index) => {
+                const item = getStage(id);
+                const active = item.id === selected;
+                return (
+                  <button
+                    type="button"
+                    key={item.id}
+                    aria-pressed={active}
+                    onClick={() => setSelected(item.id)}
+                    className={`group relative flex min-h-32 flex-col items-start rounded-xl border p-4 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${
+                      active
+                        ? "border-[var(--accent)] bg-[var(--glow-accent)] shadow-[0_0_0_1px_var(--accent)]"
+                        : item.kind === "decision"
+                          ? "border-[color-mix(in_srgb,var(--warning)_45%,var(--border))] bg-[color-mix(in_srgb,var(--warning)_8%,var(--card))] hover:border-[var(--warning)]"
+                          : "border-[var(--border)] bg-[var(--inset)] hover:border-[var(--border-strong)] hover:bg-[var(--card-raised)]"
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 text-[10px] font-semibold tracking-[0.12em] text-[var(--muted)] uppercase">
+                      {item.kind === "decision" ? (
+                        <GitBranch size={13} aria-hidden="true" />
+                      ) : (
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--card-raised)] text-[var(--foreground)]">
+                          {group.eyebrow.startsWith("01") ? String(index + 1).padStart(2, "0") : item.id === "analyze" ? "06" : item.id === "score" ? "09" : item.id === "alert" ? "10" : "11"}
+                        </span>
+                      )}
+                      {item.kind === "decision" ? "Branch / outcome" : "Process step"}
+                      {active && <Check size={13} className="ml-auto text-[var(--link)]" aria-label="Selected" />}
+                    </span>
+                    <span className="mt-3 font-semibold text-[var(--foreground)]">{item.title}</span>
+                    <span className="mt-1 text-xs leading-relaxed text-[var(--muted)]">{item.summary}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        ))}
+
+        <section className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4 sm:p-5">
+          <p className="text-[11px] font-bold tracking-[0.14em] text-[var(--warning)] uppercase">
+            Important branches
+          </p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            {["invalid", "missing"].map((id) => {
+              const item = getStage(id);
               return (
-                <g key={item.id} transform={`translate(${item.x} ${item.y})`} onClick={() => setSelected(item.id)} style={{ cursor: "pointer" }}>
-                  <rect
-                    width={item.w}
-                    height="78"
-                    rx="12"
-                    fill={fill}
-                    stroke={active ? "var(--accent)" : "var(--border-strong)"}
-                    strokeWidth={active ? 2.5 : 1}
-                  />
-                  <text x="12" y="32" fill="var(--foreground)" fontSize="13" fontWeight="600">
-                    {wrapLabel(item.title).map((line, index) => (
-                      <tspan key={line} x="12" dy={index === 0 ? 0 : 16}>
-                        {line}
-                      </tspan>
-                    ))}
-                  </text>
-                </g>
+                <button
+                  type="button"
+                  key={item.id}
+                  aria-pressed={item.id === selected}
+                  onClick={() => setSelected(item.id)}
+                  className={`rounded-xl border p-4 text-left transition-colors ${
+                    item.id === selected
+                      ? "border-[var(--accent)] bg-[var(--glow-accent)]"
+                      : "border-[var(--border)] bg-[var(--inset)] hover:border-[var(--border-strong)]"
+                  }`}
+                >
+                  <span className="flex items-center gap-2 font-semibold">
+                    <GitBranch size={15} className="text-[var(--warning)]" aria-hidden="true" />
+                    {item.title}
+                  </span>
+                  <span className="mt-2 block text-sm leading-relaxed text-[var(--muted)]">{item.summary}</span>
+                </button>
               );
             })}
-          </g>
-        </svg>
-      </div>
-      <Panel eyebrow={stage.kind === "decision" ? "Decision" : "Stage"} title={stage.title}>
-        <p className="text-sm leading-relaxed">{stage.explanation}</p>
-        <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-          <div>
-            <dt className="text-[10px] font-semibold tracking-[0.14em] text-[var(--muted)] uppercase">Inputs</dt>
-            <dd className="text-[var(--foreground)]">{stage.inputs}</dd>
           </div>
+        </section>
+      </section>
+
+      <section
+        aria-labelledby="step-details-heading"
+        className="rounded-2xl border border-[var(--border-strong)] bg-[var(--card)] p-5 shadow-[var(--shadow)] sm:p-6"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <dt className="text-[10px] font-semibold tracking-[0.14em] text-[var(--muted)] uppercase">Outputs</dt>
-            <dd className="text-[var(--foreground)]">{stage.outputs}</dd>
+            <p className="text-xs font-semibold tracking-[0.14em] text-[var(--link)] uppercase">
+              {stage.kind === "decision" ? "Branch detail" : "Selected step"}
+            </p>
+            <h2 id="step-details-heading" className="mt-1 text-xl font-semibold">{stage.title}</h2>
+            <p className="mt-2 max-w-4xl text-sm leading-relaxed text-[var(--muted)]">{stage.explanation}</p>
           </div>
-          <div>
-            <dt className="text-[10px] font-semibold tracking-[0.14em] text-[var(--muted)] uppercase">Role</dt>
-            <dd className="text-[var(--foreground)]">{stage.role}</dd>
-          </div>
-          <div>
-            <dt className="text-[10px] font-semibold tracking-[0.14em] text-[var(--muted)] uppercase">What this app runs</dt>
-            <dd className="text-[var(--foreground)]">{stage.runtime}</dd>
-          </div>
-        </dl>
-      </Panel>
+          <span className="rounded-full border border-[var(--border)] bg-[var(--inset)] px-3 py-1 text-xs text-[var(--muted)]">
+            {stage.kind === "decision" ? "Decision point" : "Pipeline stage"}
+          </span>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <Detail label="What goes in" value={stage.inputs} />
+          <Detail label="What comes out" value={stage.outputs} />
+          <Detail label="Why it matters" value={stage.whyItMatters} />
+          <Detail label="What this demo actually does" value={stage.runtime} />
+        </div>
+        <p className="mt-4 border-t border-[var(--border)] pt-3 text-xs text-[var(--muted)]">
+          Implementation reference: <code className="text-[var(--code-fg)]">{stage.implementation}</code>
+        </p>
+      </section>
     </div>
   );
 }
 
-function wrapLabel(title: string) {
-  const words = title.split(" ");
-  const lines: string[] = [];
-  let current = "";
-  for (const word of words) {
-    const next = current ? `${current} ${word}` : word;
-    if (next.length > 22 && current) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = next;
-    }
-  }
-  if (current) lines.push(current);
-  return lines.slice(0, 3);
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--inset)] p-4">
+      <h3 className="text-xs font-semibold tracking-[0.1em] text-[var(--muted)] uppercase">{label}</h3>
+      <p className="mt-2 text-sm leading-relaxed text-[var(--foreground)]">{value}</p>
+    </div>
+  );
 }

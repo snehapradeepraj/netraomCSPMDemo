@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import type { AnalyticsModel } from "@/lib/securityAnalytics";
+import type { InventorySnapshot } from "@/lib/inventoryHistory";
 
 const tooltipStyle = {
   background: "var(--tooltip-bg)",
@@ -24,7 +25,7 @@ export function DashboardCharts({ model }: { model: AnalyticsModel }) {
   const categoryTotal = model.categoryDonut.reduce((sum, row) => sum + row.count, 0);
 
   return (
-    <div className="grid gap-4 xl:grid-cols-3">
+    <div className="grid gap-4 xl:grid-cols-2">
       <figure className="min-w-0">
         <figcaption className="mb-2 text-xs text-[var(--muted)]">
           Category. Select a slice to open that Findings tab.
@@ -106,6 +107,26 @@ export function DashboardCharts({ model }: { model: AnalyticsModel }) {
           </ResponsiveContainer>
         </div>
       </figure>
+    </div>
+  );
+}
+
+export function InventoryTrendChart({ snapshots }: { snapshots: InventorySnapshot[] }) {
+  return (
+    <div className="h-72 min-w-0">
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={snapshots} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+          <XAxis dataKey="date" tick={{ fill: "var(--muted)", fontSize: 10 }} axisLine={false} tickLine={false} />
+          <YAxis allowDecimals={false} tick={{ fill: "var(--muted)", fontSize: 11 }} axisLine={false} tickLine={false} width={38} />
+          <Tooltip contentStyle={tooltipStyle} />
+          <Legend />
+          <Area type="monotone" dataKey="total" name="Total assets" stroke="var(--accent)" fill="var(--accent)" fillOpacity={0.12} dot={{ r: 3 }} />
+          <Area type="monotone" dataKey="aws" name="AWS" stroke="var(--warning)" fill="var(--warning)" fillOpacity={0.08} dot={{ r: 3 }} />
+          <Area type="monotone" dataKey="gcp" name="GCP" stroke="var(--live)" fill="var(--live)" fillOpacity={0.08} dot={{ r: 3 }} />
+          <Area type="monotone" dataKey="exposed" name="Internet exposed" stroke="var(--critical)" fill="var(--critical)" fillOpacity={0.08} dot={{ r: 3 }} />
+        </AreaChart>
+      </ResponsiveContainer>
     </div>
   );
 }

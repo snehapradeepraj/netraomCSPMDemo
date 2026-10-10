@@ -8,6 +8,7 @@ import { AssetsPage } from "@/pages/AssetsPage";
 import { AssistantPage } from "@/pages/AssistantPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { FindingsPage } from "@/pages/FindingsPage";
+import { ThreatMapPage } from "@/pages/ThreatMapPage";
 import { AttackPathPage } from "@/pages/learn/AttackPathPage";
 import { CookbookPage } from "@/pages/learn/CookbookPage";
 import { GraphLabPage } from "@/pages/learn/GraphLabPage";
@@ -34,6 +35,7 @@ export function App() {
               <Route path="assets" element={<AssetsPage />} />
               <Route path="assets/:assetId" element={<AssetDetailPage />} />
               <Route path="findings" element={<FindingsPage />} />
+              <Route path="threats" element={<ThreatMapPage />} />
               <Route path="assistant" element={<AssistantPage />} />
               <Route path="learn" element={<OverviewPage />} />
               <Route path="learn/inventory" element={<InventoryPipelinePage />} />

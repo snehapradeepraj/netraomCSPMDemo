@@ -1,4 +1,4 @@
-import { Bot, Database, GraduationCap, LayoutDashboard, Shield, ShieldAlert } from "lucide-react";
+import { Activity, Bot, Database, GraduationCap, LayoutDashboard, Shield, ShieldAlert } from "lucide-react";
 import { useEffect } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import clsx from "clsx";
@@ -10,6 +10,7 @@ const links = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/assets", label: "Inventory", icon: Database },
   { to: "/findings", label: "Findings", icon: ShieldAlert },
+  { to: "/threats", label: "Threat map", icon: Activity },
   { to: "/learn", label: "Learn", icon: GraduationCap },
   { to: "/assistant", label: "Assistant", icon: Bot },
 ];
@@ -18,6 +19,7 @@ function pageTitle(pathname: string) {
   if (pathname.startsWith("/assets/")) return "Asset detail";
   if (pathname.startsWith("/assets")) return "Inventory";
   if (pathname.startsWith("/findings")) return "Findings";
+  if (pathname.startsWith("/threats")) return "Threat map";
   if (pathname.startsWith("/learn/inventory")) return "Inventory pipeline";
   if (pathname.startsWith("/learn/postgres")) return "Postgres lab";
   if (pathname.startsWith("/learn/graph")) return "Graph & Cypher lab";
